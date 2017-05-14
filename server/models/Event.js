@@ -1,4 +1,10 @@
+import Promise from 'bluebird';
+import { uniq } from 'lodash';
+import _ from 'lodash';
+
 export default function(Sequelize, DataTypes) {
+
+  const { models } = Sequelize;
 
   const Event = Sequelize.define('Event', {
     id: {
@@ -123,6 +129,39 @@ export default function(Sequelize, DataTypes) {
           createdAt: this.createdAt,
           updatedAt: this.updatedAt
         }
+      }
+    },
+
+    instanceMethods: {
+      getUsers() {
+        return this.getResponses({ include: [{model: models.User }]})
+          .then(rows => rows.map(r => r.User))
+          .then(users => uniq(users, (user) => user.id));
+      }
+    },
+
+    classMethods: {
+      createMany: (events, defaultValues = {}) => {
+        return Promise.map(events, e => Event.create(_.defaults({}, e, defaultValues)), {concurrency: 1});
+      },
+      getBySlug: (groupSlug, eventSlug) => {
+        return Event.findOne({
+          where: {
+            slug: eventSlug
+          },
+          include: [{
+            model: models.Group,
+            where: {
+              slug: groupSlug
+            }
+          }]
+        })
+        .then(ev => {
+          if (!ev) {
+            throw new Error(`No event found with slug: ${eventSlug} in collective: ${groupSlug}`)
+          }
+          return ev;
+        })        
       }
     }
   });

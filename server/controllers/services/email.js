@@ -12,61 +12,32 @@ export const unsubscribe = (req, res, next) => {
 
   const { type, email, slug, token } = req.params;
 
-  const identifier = `${email}.${slug}.${type}.${config.keys.opencollective.secret}`;
+  const identifier = `${email}.${slug || 'any'}.${type}.${config.keys.opencollective.secret}`;
   const computedToken = crypto.createHash('md5').update(identifier).digest("hex");
   if (token !== computedToken) {
     return next(new errors.BadRequest('Invalid token'));
   }
 
-  const include = [{ model: models.User, where: { email }}];
-
-  if (slug !== 'undefined') {
-    include.push({ model: models.Group, where: { slug }});
-  }
-
-  models.Notification.findOne({
-    where: { type },
-    include
-  })
-  .then(notification => {
-    if (!notification) throw new errors.BadRequest('No notification found for this user, group and type');
-    return notification.update({ active: false })
-  })
+  Promise.all([
+    models.Group.findOne({ where: { slug }}),
+    models.User.findOne({ where: { email }})
+  ]).then(results => {
+      return results[1].unsubscribe(results[0].id, type, 'email')
+    })
   .then(() => res.send({"response": "ok"}))
   .catch(next);
 
 };
 
-const fetchSubscribers = (groupSlug, type) => {
-  return models.Notification.findAll(
-    {
-      where: {
-        channel: 'email',
-        type
-      },
-      order: [['createdAt','DESC']],
-      include: [{model: models.User }, {model: models.Group, where: { slug: groupSlug } }]
-    }
-  )
-  .then(subscriptions => subscriptions.map(s => s.User.info))
-  .then(subscribers => subscribers.map(s => {
-    s.roundedAvatar = `https://res.cloudinary.com/opencollective/image/fetch/c_thumb,g_face,h_48,r_max,w_48,bo_3px_solid_white/c_thumb,h_48,r_max,w_48,bo_2px_solid_rgb:66C71A/e_trim/f_auto/${encodeURIComponent(s.avatar)}`;
-    return s;
-  }));
-};
-
 // TODO: move to emailLib.js
 const sendEmailToList = (to, email) => {
-  const tokens = to.match(/(.+)@(.+)\.opencollective\.com/i);
-  const list = tokens[1];
-  const slug = tokens[2];
-  const type = `mailinglist.${list}`;
-  email.from = email.from || `${slug} collective <info@${slug}.opencollective.com>`;
-  email.group = email.group || { slug }; // used for the unsubscribe url
+  const { mailinglist, collectiveSlug, type } = getNotificationType(to);  
+  email.from = email.from || `${collectiveSlug} collective <hello@${collectiveSlug}.opencollective.com>`;
+  email.group = email.group || { slug: collectiveSlug }; // used for the unsubscribe url
 
-  return fetchSubscribers(slug, type)
+  return models.Notification.getSubscribers(collectiveSlug, mailinglist)
   .tap(subscribers => {
-    if (subscribers.length === 0) throw new errors.NotFound(`No subscribers found in ${slug} for email type ${type}`);
+    if (subscribers.length === 0) throw new errors.NotFound(`No subscribers found in ${collectiveSlug} for email type ${type}`);
   })
   .then(results => results.map(r => r.email))
   .then(recipients => {
@@ -145,13 +116,22 @@ export const approve = (req, res, next) => {
     })
 };
 
+export const getNotificationType = (email) => {
+  const tokens = email.match(/(.+)@(.+)\.opencollective\.com/i);
+  const collectiveSlug = tokens[2];
+  let mailinglist = tokens[1];
+  if (['info','hello','members','organizers'].indexOf(mailinglist) !== -1) {
+    mailinglist = 'members';
+  }
+  const type = `mailinglist.${mailinglist}`;
+  return { collectiveSlug, mailinglist, type };
+}
+
 export const webhook = (req, res, next) => {
   const email = req.body;
   const { recipient } = email;
-
-  const tokens = recipient.match(/(.+)@(.+)\.opencollective\.com/i);
-  const list = tokens[1];
-  const slug = tokens[2];
+  debug('webhook')(">>> webhook received", JSON.stringify(email));
+  const { mailinglist, collectiveSlug } = getNotificationType(recipient);
 
   const body = email['body-html'] || email['body-plain'];
 
@@ -164,20 +144,9 @@ export const webhook = (req, res, next) => {
     return res.send('Email already processed, skipping');
   }
 
-  // If an email is sent to expense@:slug.opencollective.com
-  // we forward it to ops+expense@opencollective.com
-  if (list.match(/^expenses?$/i)) {
-   return emailLib.sendMessage('ops+expense@opencollective.com', email.subject, body, { from: email.from })
-    .then(() => res.send('ok'))
-    .catch(e => {
-      console.error("Error: ", e);
-      next(e);
-    });
-  }
-
-  // If an email is sent to info@:slug.opencollective.com,
-  // we simply forward it to members who subscribed to that list
-  if (list === 'info') {
+  // If an email is sent to [info|hello|members|organizers]@:collectiveSlug.opencollective.com,
+  // we simply forward it to organizers who subscribed to that mailinglist (no approval process)
+  if (mailinglist === 'members') {
     return sendEmailToList(recipient, {
       subject: email.subject,
       body,
@@ -188,20 +157,29 @@ export const webhook = (req, res, next) => {
       console.error("Error: ", e);
       next(e);
     });
-  }
+  }  
 
+  // If the email is sent to :tierSlug or :eventSlug@:collectiveSlug.opencollective.com
+  // We leave the original message on the mailgun server
+  // and we send the email to the admins (organizers) of the collective for approval
+  // once approved, we will fetch the original email from the server and send it to all recipients
   let subscribers;
 
-  models.Group.find({ where: { slug } })
+  models.Group.find({ where: { slug: collectiveSlug } })
     .tap(g => {
       if (!g) throw new Error('group_not_found');
       group = g;
     })
-    .then(group => fetchSubscribers(group.slug, `mailinglist.${list}`))
-    .tap(s => {
-      if (s.length === 0) throw new Error('no_subscribers');
-      subscribers = s;
+    // We fetch all the recipients of that mailing list to give a preview in the approval email
+    .then(group => models.Notification.getSubscribers(group.slug, mailinglist))
+    .tap(results => {
+      if (results.length === 0) throw new Error('no_subscribers');
+      subscribers = results.map(s => {
+        s.roundedAvatar = `https://res.cloudinary.com/opencollective/image/fetch/c_thumb,g_face,h_48,r_max,w_48,bo_3px_solid_white/c_thumb,h_48,r_max,w_48,bo_2px_solid_rgb:66C71A/e_trim/f_auto/${encodeURIComponent(s.avatar)}`;
+        return s;
+      });
     })
+    // We fetch all the organizers of the collective (admins) to whom we will send the email to approve
     .then(() => {
       return sequelize.query(`
         SELECT * FROM "UserGroups" ug LEFT JOIN "Users" u ON ug."UserId"=u.id WHERE ug."GroupId"=:groupid AND ug.role=:role AND ug."deletedAt" IS NULL
@@ -210,16 +188,15 @@ export const webhook = (req, res, next) => {
         model: models.User
       });
     })
-    .tap(members => {
-      if (members.length === 0) throw new Error('no_members');
+    .tap(organizers => {
+      if (organizers.length === 0) throw new Error('no_organizers');
     })
-    .then(members => {
+    .then(organizers => {
       const messageId = email['message-url'].substr(email['message-url'].lastIndexOf('/')+1);
       const mailserver = email['message-url'].substring(8, email['message-url'].indexOf('.'));
       const getData = (user) => {
         return {
           from: email.from,
-          to: recipient,
           subject: email.subject,
           body: email['body-html'] || email['body-plain'],
           subscribers,
@@ -227,8 +204,11 @@ export const webhook = (req, res, next) => {
           approve_url: `${config.host.website}/api/services/email/approve?mailserver=${mailserver}&messageId=${messageId}&approver=${encodeURIComponent(user.email)}`
         };
       };
-      debug('preview')("Preview", `http://localhost:3060/templates/email/email.approve?data=${encodeURIComponent(JSON.stringify(getData(members[0])))}`);
-      return Promise.map(members, (user) => emailLib.send('email.approve', `members@${slug}.opencollective.com`, getData(user), {bcc:user.email}));
+      // We send the email to each organizer (admin) with
+      // to: organizers@:collectiveSlug.opencollective.com
+      // bcc: organizer.email
+      // body: includes mailing list, recipients, preview of the email and approve button
+      return Promise.map(organizers, (organizer) => emailLib.send('email.approve', `organizers@${collectiveSlug}.opencollective.com`, getData(organizer), { bcc: organizer.email }));
     })
     .then(() => res.send('Mailgun webhook processed successfully'))
     .catch(e => {
@@ -239,18 +219,18 @@ export const webhook = (req, res, next) => {
            * If there is no such mailing list,
            * - if the sender is a MEMBER, we send an email to confirm to create the mailing list
            *   with the people in /cc as initial subscribers
-           * - if the sender is unknown, we return an email suggesting to contact info@:slug.opencollective.com
+           * - if the sender is unknown, we return an email suggesting to contact info@:collectiveSlug.opencollective.com
            */
           return res.send({error: { message: `There is no user subscribed to ${recipient}` }});
         case 'group_not_found':
           /**
            * TODO
            * If there is no such collective, we send an email to confirm to create the collective
-           * with the people in /cc as initial members
+           * with the people in /cc as initial organizers
            */
-          return res.send({error: { message: `There is no group with slug ${slug}` }});
-        case 'no_members':
-          return res.send({error: { message: `There is no members to approve emails sent to ${email.recipient}` }});
+          return res.send({error: { message: `There is no collective with slug ${collectiveSlug}` }});
+        case 'no_organizers':
+          return res.send({error: { message: `There is no organizers to approve emails sent to ${email.recipient}` }});
         default:
           return next(e);
       }

@@ -16,6 +16,8 @@ import userLib from '../lib/userlib';
 import knox from '../gateways/knox';
 import imageUrlLib from '../lib/imageUrlToAmazonUrl';
 
+import { hasRole } from '../lib/auth';
+
 /**
  * Constants.
  */
@@ -25,6 +27,8 @@ const SALT_WORK_FACTOR = 10;
  * Model.
  */
 export default (Sequelize, DataTypes) => {
+
+  const models = Sequelize.models;
 
   const User = Sequelize.define('User', {
 
@@ -329,22 +333,43 @@ export default (Sequelize, DataTypes) => {
 
       getLatestDonations(since, until, tags) {
         tags = tags || [];
-        return Sequelize.models.Transaction.findAll({
+        return models.Transaction.findAll({
           where: {
             UserId: this.id,
             createdAt: { $gte: since || 0, $lt: until || new Date}
           },
           order: [ ['amount','DESC'] ],
-          include: [ { model: Sequelize.models.Group, where: { tags: { $contains: tags } } } ]
+          include: [ { model: models.Group, where: { tags: { $contains: tags } } } ]
         });
       },
 
       getRoles() {
-        return Sequelize.models.UserGroup.findAll({
+        return models.UserGroup.findAll({
           where: {
             UserId: this.id
           }
         });
+      },
+
+      unsubscribe(GroupId, type, channel = 'email') {
+        const notification = {
+          UserId: this.id,
+          GroupId,
+          type,
+          channel
+        };
+        return models.Notification.findOne({ where: notification })
+        .then(result => {
+          if (result) return result.update({active: false})
+          else {
+            notification.active = false;
+            return models.Notification.create(notification);
+          }
+        })
+      },
+
+      canEditGroup(groupid) {
+        return hasRole(this.id, groupid, ['MEMBER', 'HOST']);
       },
 
       updateWhiteListedAttributes(attributes) {
@@ -458,7 +483,7 @@ export default (Sequelize, DataTypes) => {
             }
           }
         })
-        .then(user => user || Sequelize.models.User.create(Object.assign({}, { email }, otherAttributes)))
+        .then(user => user || models.User.create(Object.assign({}, { email }, otherAttributes)))
       },
 
       splitName(name) {
@@ -488,7 +513,7 @@ export default (Sequelize, DataTypes) => {
 
       },
       afterCreate: (instance) => {
-        Sequelize.models.Notification.createMany([{ type: 'user.yearlyreport' }, { type: 'user.monthlyreport' }], { channel: 'email', UserId: instance.id })
+        models.Notification.createMany([{ type: 'user.yearlyreport' }, { type: 'user.monthlyreport' }], { channel: 'email', UserId: instance.id })
           .then(() => userLib.updateUserInfoFromClearbit(instance));
       }
     }

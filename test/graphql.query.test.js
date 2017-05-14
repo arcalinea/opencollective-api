@@ -62,7 +62,8 @@ describe('Query Tests', () => {
             }
           }
         `;
-        const result = await graphql(schema, query);
+        const context = { remoteUser: null };
+        const result = await graphql(schema, query, null, context);
         expect(result.errors.length).to.equal(1);
         expect(result.errors[0].message).to.equal('Field \"Event\" argument \"collectiveSlug\" of type \"String!\" is required but not provided.');
       })
@@ -73,17 +74,18 @@ describe('Query Tests', () => {
       it('when given a non-existent slug', async () => {
         const query = `
           query getMultipleEvents {
-            allEventsForCollective(collectiveSlug: "non-existent-slug") {
+            allEvents(collectiveSlug: "non-existent-slug") {
               id,
               name,
               description
             }
           }
         `;
-        const result = await graphql(schema, query);
+        const context = { remoteUser: null };
+        const result = await graphql(schema, query, null, context);
         expect(result).to.deep.equal({
           data: {
-            allEventsForCollective: []
+            allEvents: []
           }
         });
       });
@@ -91,17 +93,18 @@ describe('Query Tests', () => {
       it('when given an existing collective slug when it has no events', async () => {
         const query = `
           query getMultipleEvents {
-            allEventsForCollective(collectiveSlug: "${group3.slug}") {
+            allEvents(collectiveSlug: "${group3.slug}") {
               id,
               name,
               description
             }
           }
         `;
-        const result = await graphql(schema, query);
+        const context = { remoteUser: null };
+        const result = await graphql(schema, query, null, context);
         expect(result).to.deep.equal({
           data: {
-            allEventsForCollective: []
+            allEvents: []
           }
         });
       });
@@ -124,7 +127,8 @@ describe('Query Tests', () => {
             }
           }
         `;
-        const result = await graphql(schema, query);
+        const context = { remoteUser: null };
+        const result = await graphql(schema, query, null, context);
         expect(result).to.deep.equal({
           data: {
             Event: {
@@ -146,17 +150,18 @@ describe('Query Tests', () => {
         it('when given only a collective slug', async () => {
           const query = `
             query getMultipleEvents {
-              allEventsForCollective(collectiveSlug: "${group1.slug}") {
+              allEvents(collectiveSlug: "${group1.slug}") {
                 id,
                 name,
                 description
               }
             }
           `;
-          const result = await graphql(schema, query);
+          const context = { remoteUser: null };
+          const result = await graphql(schema, query, null, context);
           expect(result).to.deep.equal({
             data: {
-              allEventsForCollective: [
+              allEvents: [
                 {
                   description: "January monthly meetup",
                   id: 1,
@@ -236,7 +241,8 @@ describe('Query Tests', () => {
               }
             }
           `;
-          const result = await graphql(schema, query);
+          const context = { remoteUser: null };
+          const result = await graphql(schema, query, null, context);
           const response = result.data.Event.responses[0];
           expect(response).to.have.property("createdAt");
           expect(response).to.have.property("status");
@@ -245,7 +251,7 @@ describe('Query Tests', () => {
         it('when given only a collective slug', async () => {
           const query = `
             query getOneEvent {
-              allEventsForCollective(collectiveSlug: "${group1.slug}") {
+              allEvents(collectiveSlug: "${group1.slug}") {
                 id,
                 name,
                 description,
@@ -277,10 +283,11 @@ describe('Query Tests', () => {
               }
             }
           `;
-          const result = await graphql(schema, query);
+          const context = { remoteUser: null };
+          const result = await graphql(schema, query, null, context);
           expect(result).to.deep.equal({
             data: {
-              allEventsForCollective: [
+              allEvents: [
                 {
                   id: 1,
                   name: "January meetup",

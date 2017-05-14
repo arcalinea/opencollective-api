@@ -1,6 +1,9 @@
+import Promise from 'bluebird';
 import status from '../constants/response_status';
+import _ from 'lodash';
 
 export default function(Sequelize, DataTypes) {
+
   const Response = Sequelize.define('Response', {
     id: {
       type: DataTypes.INTEGER,
@@ -107,6 +110,26 @@ export default function(Sequelize, DataTypes) {
           createdAt: this.createdAt,
           updatedAt: this.updatedAt
         }
+      }
+    },
+
+    instanceMethods: {
+      getUserForViewer(viewer) {
+        const promises = [this.getUser()];
+        if (viewer) {
+          promises.push(viewer.canEditGroup(this.GroupId));
+        }
+        return Promise.all(promises)
+        .then(results => {
+          const user = results[0];
+          const canEditGroup = results[1];
+          return canEditGroup ? user.info : user.public;
+        })
+      }
+    },
+    classMethods: {
+      createMany: (responses, defaultValues = {}) => {
+        return Promise.map(responses, r => Response.create(_.defaults({}, r, defaultValues)), {concurrency: 1});
       }
     }
   });
