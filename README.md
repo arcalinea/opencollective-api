@@ -8,7 +8,7 @@
 
 ## How to get started
 
-Note: If you see a step below that could be improved (or is outdated), please update instructions. We rarely go through this process ourselves, so your fresh pair of eyes and your recent experience with it, makes you the best candidate to improve them for other users. 
+Note: If you see a step below that could be improved (or is outdated), please update instructions. We rarely go through this process ourselves, so your fresh pair of eyes and your recent experience with it, makes you the best candidate to improve them for other users.
 
 ### Database
 Install Postgres 9.x. Start the database server, if necessary.
@@ -18,6 +18,8 @@ running `ps aux | grep postgres` and note the directory in the `postgres` or `po
 It will look something like `/Library/PostgreSQL/9.3/data`. We'll call this the `$POSTGRES_DATADIR`. `cd` to `$POSTGRES_DATADIR`, and
 edit `pg_hba.conf` to `trust` local socket connections and local IP connections. Restart `postgres` - on Mac OS X, there may be
 restart scripts already in place with `brew`, if not use `pg_ctl -D $POSTGRES_DATADIR restart`.
+
+On Linux, the `pg_hba.conf` file may be in `/etc/postgresql/9.3/main/`.
 
 Now, assuming the postgres database superuser is `postgres`, let's create the databases.
 ```
@@ -116,4 +118,3 @@ The migration script uses `SEQUELIZE_ENV` to know which Postgres config to take 
 2) `heroku run bash -a opencollective-production-api`
 
 3) `npm run db:migrate`
-
